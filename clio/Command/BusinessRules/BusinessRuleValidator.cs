@@ -26,6 +26,16 @@ internal static class BusinessRuleValidator {
 	internal static void Validate(
 		BusinessRule rule,
 		IReadOnlyDictionary<string, BusinessRuleAttributeDescriptor> attributeMap,
+		StaticFilterSchemaAwareValidator? schemaAwareValidator,
+		Guid packageUId) {
+		Action<BusinessRuleAction, IReadOnlyDictionary<string, BusinessRuleAttributeDescriptor>> validate =
+			(action, map) => ValidateEntityActionWithSchemaAwareFilter(action, map, schemaAwareValidator, packageUId);
+		Validate(rule, attributeMap, validate);
+	}
+
+	internal static void Validate(
+		BusinessRule rule,
+		IReadOnlyDictionary<string, BusinessRuleAttributeDescriptor> attributeMap,
 		Action<BusinessRuleAction, IReadOnlyDictionary<string, BusinessRuleAttributeDescriptor>> validateAction) {
 		ArgumentNullException.ThrowIfNull(rule);
 
@@ -38,6 +48,18 @@ internal static class BusinessRuleValidator {
 
 		ValidateOptionalConditionGroup(rule.Condition, attributeMap);
 		ValidateActions(rule.Actions, validateAction, attributeMap);
+	}
+
+	private static void ValidateEntityActionWithSchemaAwareFilter(
+		BusinessRuleAction action,
+		IReadOnlyDictionary<string, BusinessRuleAttributeDescriptor> attributeMap,
+		StaticFilterSchemaAwareValidator? schemaAwareValidator,
+		Guid packageUId) {
+		if (action is ApplyStaticFilterBusinessRuleAction setFilter) {
+			ValidateSetFilterAction(setFilter, attributeMap, schemaAwareValidator, packageUId);
+			return;
+		}
+		ValidateEntityAction(action, attributeMap);
 	}
 
 	// `condition` is optional — when omitted the rule applies unconditionally
@@ -142,7 +164,14 @@ internal static class BusinessRuleValidator {
 
 	private static void ValidateSetFilterAction(
 		ApplyStaticFilterBusinessRuleAction action,
-		IReadOnlyDictionary<string, BusinessRuleAttributeDescriptor> attributeMap) {
+		IReadOnlyDictionary<string, BusinessRuleAttributeDescriptor> attributeMap) =>
+		ValidateSetFilterAction(action, attributeMap, schemaAwareValidator: null, packageUId: Guid.Empty);
+
+	private static void ValidateSetFilterAction(
+		ApplyStaticFilterBusinessRuleAction action,
+		IReadOnlyDictionary<string, BusinessRuleAttributeDescriptor> attributeMap,
+		StaticFilterSchemaAwareValidator? schemaAwareValidator,
+		Guid packageUId) {
 
 		if (action.ExtensionData is not null && action.ExtensionData.ContainsKey("items")) {
 			throw new ArgumentException(
@@ -183,6 +212,7 @@ internal static class BusinessRuleValidator {
 
 		try {
 			StaticFilterStructuralValidator.Validate(friendly);
+			schemaAwareValidator?.Validate(friendly, targetDescriptor.ReferenceSchemaName!, packageUId);
 		} catch (BusinessRuleFilterException ex) {
 			throw new ArgumentException($"{ex.ErrorCode}: {ex.Message} (path={ex.FieldPath})", ex);
 		}

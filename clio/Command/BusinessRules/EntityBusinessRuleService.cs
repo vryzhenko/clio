@@ -32,7 +32,8 @@ internal sealed class EntityBusinessRuleService(
 	IBusinessRulePackageResolver packageResolver,
 	IEntityBusinessRuleAttributeProvider attributeProvider,
 	IBusinessRuleAddonService businessRuleAddonService,
-	IEsqFilterConverterClient esqConverterClient)
+	StaticFilterEsqEnvelopeBuilder envelopeBuilder,
+	StaticFilterSchemaAwareValidator schemaAwareValidator)
 	: IEntityBusinessRuleService {
 
 	public BusinessRuleCreateResult Create(EntityBusinessRuleCreateRequest request) {
@@ -43,12 +44,14 @@ internal sealed class EntityBusinessRuleService(
 		EntityBusinessRuleAttributeContext attributeContext = attributeProvider.GetAttributes(
 			request.EntitySchemaName,
 			packageUId);
-		BusinessRuleValidator.Validate(request.Rule, attributeContext.Attributes);
+		BusinessRuleValidator.Validate(request.Rule, attributeContext.Attributes, schemaAwareValidator, packageUId);
 
 		BusinessRuleMetadataDto createdRule = BusinessRuleMetadataConverter.ToMetadata(
 			attributeContext.Attributes,
 			request.Rule,
-			esqConverterClient);
+			envelopeBuilder,
+			request.EntitySchemaName,
+			packageUId);
 		return businessRuleAddonService.AppendRule(
 			BuildAddonSchemaRequest(attributeContext.EntitySchema, packageUId),
 			request.Rule,

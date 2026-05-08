@@ -45,11 +45,17 @@ public sealed class EntityBusinessRuleServiceTests {
 		_addonSchemaDesignerClient
 			.When(client => client.SaveSchema(Arg.Any<AddonSchemaDto>()))
 			.Do(callInfo => _savedAddonSchema = callInfo.Arg<AddonSchemaDto>());
+		EntityBusinessRuleSchemaProvider schemaProvider = new(_entitySchemaDesignerClient);
+		FilterSchemaResolver filterSchemaResolver = new(schemaProvider);
+		LookupDisplayValueResolver lookupDisplayValueResolver = new(Substitute.For<IApplicationClient>());
+		StaticFilterEsqEnvelopeBuilder envelopeBuilder = new(filterSchemaResolver, lookupDisplayValueResolver);
+		StaticFilterSchemaAwareValidator schemaAwareValidator = new(filterSchemaResolver);
 		_service = new EntityBusinessRuleService(
 			new BusinessRulePackageResolver(_applicationPackageListProvider),
-			new EntityBusinessRuleAttributeProvider(new EntityBusinessRuleSchemaProvider(_entitySchemaDesignerClient)),
+			new EntityBusinessRuleAttributeProvider(schemaProvider),
 			new BusinessRuleAddonService(_addonSchemaDesignerClient, new SynchronousBackgroundTaskRunner()),
-			Substitute.For<IEsqFilterConverterClient>());
+			envelopeBuilder,
+			schemaAwareValidator);
 	}
 
 	[TestCase("", "UsrOrder", true, "package-name is required.")]

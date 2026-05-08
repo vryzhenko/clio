@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Text.Json;
-using System.Text.Json.Nodes;
 using Clio.Command.BusinessRules;
 using Clio.Command.BusinessRules.Filters;
 using Clio.Command.EntitySchemaDesigner;
@@ -17,47 +16,22 @@ public sealed class BusinessRuleMetadataConverterApplyStaticFilterTests {
 
 	private const int LookupDataValueType = 10;
 	private const int TextDataValueType = 1;
-	private const string EsqEnvelope =
-		"{\"items\":{\"abc\":{\"filterType\":4}},\"rootSchemaName\":\"City\",\"filterType\":6}";
+	private static readonly Guid PackageUId = Guid.Parse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa");
 
 	[Test]
 	[Category("Unit")]
-	[Description("Calls the server-side converter client with the rootSchemaName resolved from the entity column map.")]
-	public void ToMetadata_Should_Invoke_Client_With_ReferenceSchema_RootSchemaName() {
-		// Arrange
-		IEsqFilterConverterClient client = Substitute.For<IEsqFilterConverterClient>();
-		string capturedRoot = string.Empty;
-		client.ConvertToEsqFilter(Arg.Any<string>(), Arg.Any<StaticFilterGroup>())
-			.Returns(call => {
-				capturedRoot = call.Arg<string>();
-				return EsqEnvelope;
-			});
-
-		// Act
-		BusinessRuleMetadataDto result = BusinessRuleMetadataConverter.ToMetadata(
-			BuildColumnMap(),
-			BuildRule(),
-			client);
-
-		// Assert
-		capturedRoot.Should().Be("City");
-		result.Cases.Should().HaveCount(1);
-	}
-
-	[Test]
-	[Category("Unit")]
-	[Description("Embeds the server-returned envelope as a JSON STRING in BusinessRuleValueExpression.value — matches the platform's compressed BVE1 storage format (escape-once string).")]
+	[Description("Embeds the in-process envelope as a JSON STRING in BusinessRuleValueExpression.value — matches the platform's compressed BVE1 storage format (escape-once string).")]
 	public void ToMetadata_Should_Embed_Envelope_As_Escaped_Json_String() {
 		// Arrange
-		IEsqFilterConverterClient client = Substitute.For<IEsqFilterConverterClient>();
-		client.ConvertToEsqFilter(Arg.Any<string>(), Arg.Any<StaticFilterGroup>())
-			.Returns(EsqEnvelope);
+		StaticFilterEsqEnvelopeBuilder builder = BuildEnvelopeBuilder();
 
 		// Act
 		BusinessRuleMetadataDto result = BusinessRuleMetadataConverter.ToMetadata(
 			BuildColumnMap(),
 			BuildRule(),
-			client);
+			builder,
+			"UsrContact",
+			PackageUId);
 
 		// Assert
 		string serialized = JsonSerializer.Serialize(result.Cases[0].Actions[0], BusinessRuleConstants.JsonOptions);
@@ -68,8 +42,11 @@ public sealed class BusinessRuleMetadataConverterApplyStaticFilterTests {
 		JsonElement valueProp = valueExpr.GetProperty("value");
 		valueProp.ValueKind.Should().Be(JsonValueKind.String,
 			because: "platform stores BusinessRuleValueExpression.value as an escaped JSON string (BVE1)");
-		valueProp.GetString().Should().Be(EsqEnvelope,
-			because: "the inner string content is the envelope verbatim");
+		string envelopeJson = valueProp.GetString()!;
+		envelopeJson.Should().Contain("\"rootSchemaName\":\"City\"",
+			because: "the action targets a Lookup whose reference schema is City");
+		envelopeJson.Should().Contain("\"filterType\":6",
+			because: "outer envelope is a FilterGroup");
 	}
 
 	[Test]
@@ -77,15 +54,15 @@ public sealed class BusinessRuleMetadataConverterApplyStaticFilterTests {
 	[Description("Apply-static-filter expression emits only typeName/uId/type/path — no extra empty-string hints.")]
 	public void ToMetadata_Should_Emit_Minimal_Expression() {
 		// Arrange
-		IEsqFilterConverterClient client = Substitute.For<IEsqFilterConverterClient>();
-		client.ConvertToEsqFilter(Arg.Any<string>(), Arg.Any<StaticFilterGroup>())
-			.Returns(EsqEnvelope);
+		StaticFilterEsqEnvelopeBuilder builder = BuildEnvelopeBuilder();
 
 		// Act
 		BusinessRuleMetadataDto result = BusinessRuleMetadataConverter.ToMetadata(
 			BuildColumnMap(),
 			BuildRule(),
-			client);
+			builder,
+			"UsrContact",
+			PackageUId);
 
 		// Assert
 		string serialized = JsonSerializer.Serialize(result.Cases[0].Actions[0], BusinessRuleConstants.JsonOptions);
@@ -99,14 +76,14 @@ public sealed class BusinessRuleMetadataConverterApplyStaticFilterTests {
 
 	[Test]
 	[Category("Unit")]
-	[Description("Throws when the converter is invoked without an IEsqFilterConverterClient; apply-static-filter requires it.")]
-	public void ToMetadata_Should_Throw_When_Client_Is_Missing() {
+	[Description("Throws when the converter is invoked without a StaticFilterEsqEnvelopeBuilder; apply-static-filter requires it.")]
+	public void ToMetadata_Should_Throw_When_Builder_Is_Missing() {
 		// Act
 		Action act = () => BusinessRuleMetadataConverter.ToMetadata(BuildColumnMap(), BuildRule());
 
 		// Assert
 		act.Should().Throw<InvalidOperationException>()
-			.WithMessage("*IEsqFilterConverterClient*");
+			.WithMessage("*StaticFilterEsqEnvelopeBuilder*");
 	}
 
 	[Test]
@@ -114,9 +91,7 @@ public sealed class BusinessRuleMetadataConverterApplyStaticFilterTests {
 	[Description("Apply-static-filter rule with no `condition` produces a case with no condition group and a single DataLoaded trigger — matches the platform editor's default for unconditional static filters.")]
 	public void ToMetadata_Should_Allow_Apply_Static_Filter_Without_Condition() {
 		// Arrange
-		IEsqFilterConverterClient client = Substitute.For<IEsqFilterConverterClient>();
-		client.ConvertToEsqFilter(Arg.Any<string>(), Arg.Any<StaticFilterGroup>())
-			.Returns(EsqEnvelope);
+		StaticFilterEsqEnvelopeBuilder builder = BuildEnvelopeBuilder();
 		BusinessRule rule = new() {
 			Caption = "Always restrict City",
 			Condition = null,
@@ -133,7 +108,9 @@ public sealed class BusinessRuleMetadataConverterApplyStaticFilterTests {
 		BusinessRuleMetadataDto result = BusinessRuleMetadataConverter.ToMetadata(
 			BuildColumnMap(),
 			rule,
-			client);
+			builder,
+			"UsrContact",
+			PackageUId);
 
 		// Assert
 		result.Cases[0].Condition.Should().BeNull(
@@ -149,7 +126,7 @@ public sealed class BusinessRuleMetadataConverterApplyStaticFilterTests {
 	public void ToPageMetadata_Should_Reject_Apply_Static_Filter() {
 		// Arrange
 		IReadOnlyDictionary<string, BusinessRuleAttributeDescriptor> attributeMap =
-			Clio.Command.BusinessRules.BusinessRuleHelpers.BuildAttributeDescriptorMap(BuildColumnMap());
+			BusinessRuleHelpers.BuildAttributeDescriptorMap(BuildColumnMap());
 
 		// Act
 		Action act = () => BusinessRuleMetadataConverter.ToPageMetadata(attributeMap, BuildRule());
@@ -157,6 +134,40 @@ public sealed class BusinessRuleMetadataConverterApplyStaticFilterTests {
 		// Assert
 		act.Should().Throw<InvalidOperationException>()
 			.WithMessage("apply-static-filter is not supported in page-level business rules.");
+	}
+
+	private static StaticFilterEsqEnvelopeBuilder BuildEnvelopeBuilder() {
+		// City schema exposes a Country lookup; filling out the reference graph keeps the
+		// resolver from short-circuiting and lets the builder embed a realistic envelope.
+		IEntityBusinessRuleSchemaProvider schemaProvider = Substitute.For<IEntityBusinessRuleSchemaProvider>();
+		EntityDesignSchemaDto citySchema = new() {
+			Name = "City",
+			Columns = new[] {
+				new EntitySchemaColumnDto {
+					Name = "Name",
+					DataValueType = TextDataValueType
+				},
+				new EntitySchemaColumnDto {
+					Name = "Country",
+					DataValueType = LookupDataValueType,
+					ReferenceSchema = new EntityDesignSchemaDto { Name = "Country" }
+				}
+			}
+		};
+		EntityDesignSchemaDto countrySchema = new() {
+			Name = "Country",
+			Columns = new[] {
+				new EntitySchemaColumnDto { Name = "Name", DataValueType = TextDataValueType },
+				new EntitySchemaColumnDto { Name = "Id", DataValueType = 0 }
+			}
+		};
+		schemaProvider.GetSchema("City", PackageUId).Returns(citySchema);
+		schemaProvider.GetSchema("Country", PackageUId).Returns(countrySchema);
+		FilterSchemaResolver schemaResolver = new(schemaProvider);
+		ILookupDisplayValueResolver displayResolver = Substitute.For<ILookupDisplayValueResolver>();
+		displayResolver.Resolve(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<Guid>(), Arg.Any<bool>())
+			.Returns(_ => null);
+		return new StaticFilterEsqEnvelopeBuilder(schemaResolver, displayResolver);
 	}
 
 	private static BusinessRule BuildRule() {

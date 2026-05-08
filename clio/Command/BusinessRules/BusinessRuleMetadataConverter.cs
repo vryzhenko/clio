@@ -23,32 +23,39 @@ internal static class BusinessRuleMetadataConverter {
 	internal static BusinessRuleMetadataDto ToMetadata(
 		IReadOnlyDictionary<string, EntitySchemaColumnDto> columnMap,
 		BusinessRule rule,
-		IEsqFilterConverterClient? esqConverterClient) =>
-		ToMetadata(BuildAttributeDescriptorMap(columnMap), rule, esqConverterClient);
+		StaticFilterEsqEnvelopeBuilder? envelopeBuilder,
+		string? rootSchemaName = null,
+		Guid packageUId = default) =>
+		ToMetadata(BuildAttributeDescriptorMap(columnMap), rule, envelopeBuilder, rootSchemaName, packageUId);
 
 	internal static BusinessRuleMetadataDto ToMetadata(
 		IReadOnlyDictionary<string, BusinessRuleAttributeDescriptor> attributeMap,
 		BusinessRule rule) =>
-		ToMetadata(attributeMap, rule, esqConverterClient: null);
+		ToMetadata(attributeMap, rule, envelopeBuilder: null);
 
 	internal static BusinessRuleMetadataDto ToMetadata(
 		IReadOnlyDictionary<string, BusinessRuleAttributeDescriptor> attributeMap,
 		BusinessRule rule,
-		IEsqFilterConverterClient? esqConverterClient) =>
-		ToMetadata(attributeMap, rule, includeAttributeReferenceSchemaName: true, esqConverterClient);
+		StaticFilterEsqEnvelopeBuilder? envelopeBuilder,
+		string? rootSchemaName = null,
+		Guid packageUId = default) =>
+		ToMetadata(attributeMap, rule, includeAttributeReferenceSchemaName: true, envelopeBuilder, rootSchemaName, packageUId);
 
 	internal static BusinessRuleMetadataDto ToPageMetadata(
 		IReadOnlyDictionary<string, BusinessRuleAttributeDescriptor> attributeMap,
 		BusinessRule rule) =>
-		ToMetadata(attributeMap, rule, includeAttributeReferenceSchemaName: false, esqConverterClient: null);
+		ToMetadata(attributeMap, rule, includeAttributeReferenceSchemaName: false, envelopeBuilder: null, rootSchemaName: null, packageUId: default);
 
 	private static BusinessRuleMetadataDto ToMetadata(
 		IReadOnlyDictionary<string, BusinessRuleAttributeDescriptor> attributeMap,
 		BusinessRule rule,
 		bool includeAttributeReferenceSchemaName,
-		IEsqFilterConverterClient? esqConverterClient) {
+		StaticFilterEsqEnvelopeBuilder? envelopeBuilder,
+		string? rootSchemaName,
+		Guid packageUId) {
 		string ruleUId = Guid.NewGuid().ToString();
-		BusinessRuleCaseMetadataDto @case = BuildCase(attributeMap, rule, includeAttributeReferenceSchemaName, esqConverterClient);
+		BusinessRuleCaseMetadataDto @case = BuildCase(
+			attributeMap, rule, includeAttributeReferenceSchemaName, envelopeBuilder, rootSchemaName, packageUId);
 		List<BusinessRuleTriggerMetadataDto> triggers = BuildTriggers(rule.Condition?.Conditions ?? []);
 		return new BusinessRuleMetadataDto {
 			TypeName = BusinessRuleTypeName,
@@ -65,7 +72,9 @@ internal static class BusinessRuleMetadataConverter {
 		IReadOnlyDictionary<string, BusinessRuleAttributeDescriptor> attributeMap,
 		BusinessRule rule,
 		bool includeAttributeReferenceSchemaName,
-		IEsqFilterConverterClient? esqConverterClient) {
+		StaticFilterEsqEnvelopeBuilder? envelopeBuilder,
+		string? rootSchemaName,
+		Guid packageUId) {
 		return new BusinessRuleCaseMetadataDto {
 			TypeName = BusinessRuleCaseTypeName,
 			UId = Guid.NewGuid().ToString(),
@@ -73,7 +82,8 @@ internal static class BusinessRuleMetadataConverter {
 				? null
 				: BuildConditionGroup(attributeMap, rule.Condition, includeAttributeReferenceSchemaName),
 			Actions = rule.Actions
-				.Select(action => BuildAction(attributeMap, action, includeAttributeReferenceSchemaName, esqConverterClient))
+				.Select(action => BuildAction(
+					attributeMap, action, includeAttributeReferenceSchemaName, envelopeBuilder, rootSchemaName, packageUId))
 				.ToList()
 		};
 	}
@@ -165,13 +175,15 @@ internal static class BusinessRuleMetadataConverter {
 		IReadOnlyDictionary<string, BusinessRuleAttributeDescriptor> attributeMap,
 		BusinessRuleAction action,
 		bool includeAttributeReferenceSchemaName,
-		IEsqFilterConverterClient? esqConverterClient) {
+		StaticFilterEsqEnvelopeBuilder? envelopeBuilder,
+		string? rootSchemaName,
+		Guid packageUId) {
 		if (action is ApplyStaticFilterBusinessRuleAction setFilter) {
 			if (!includeAttributeReferenceSchemaName) {
 				throw new InvalidOperationException(
 					"apply-static-filter is not supported in page-level business rules.");
 			}
-			return BuildApplyStaticFilterAction(attributeMap, setFilter, esqConverterClient);
+			return BuildApplyStaticFilterAction(attributeMap, setFilter, envelopeBuilder, rootSchemaName, packageUId);
 		}
 
 		if (string.Equals(action.ActionType, SetValuesActionTypeName, StringComparison.OrdinalIgnoreCase)) {
@@ -189,10 +201,12 @@ internal static class BusinessRuleMetadataConverter {
 	private static SetFilterBusinessRuleActionMetadataDto BuildApplyStaticFilterAction(
 		IReadOnlyDictionary<string, BusinessRuleAttributeDescriptor> attributeMap,
 		ApplyStaticFilterBusinessRuleAction action,
-		IEsqFilterConverterClient? esqConverterClient) {
-		if (esqConverterClient is null) {
+		StaticFilterEsqEnvelopeBuilder? envelopeBuilder,
+		string? callerRootSchemaName,
+		Guid packageUId) {
+		if (envelopeBuilder is null) {
 			throw new InvalidOperationException(
-				"BusinessRuleMetadataConverter.ToMetadata was invoked without an IEsqFilterConverterClient; apply-static-filter actions require the ESQ filter converter client to be wired through EntityBusinessRuleService.");
+				"BusinessRuleMetadataConverter.ToMetadata was invoked without a StaticFilterEsqEnvelopeBuilder; apply-static-filter actions require the in-process ESQ envelope builder to be wired through EntityBusinessRuleService.");
 		}
 		BusinessRuleAttributeDescriptor target = attributeMap[action.TargetAttribute];
 		string rootSchemaName = target.ReferenceSchemaName
@@ -201,7 +215,8 @@ internal static class BusinessRuleMetadataConverter {
 		StaticFilterGroup friendly = action.Filter.Deserialize<StaticFilterGroup>(JsonOptions)
 			?? throw new InvalidOperationException(
 				$"rule.actions[*].filter could not be deserialized as a friendly filter group for targetAttribute '{action.TargetAttribute}'.");
-		string esqEnvelopeJson = esqConverterClient.ConvertToEsqFilter(rootSchemaName, friendly);
+		string esqEnvelopeJson = envelopeBuilder.Build(friendly, rootSchemaName, packageUId);
+		_ = callerRootSchemaName;
 		// BusinessRuleValueExpression.value (compressed: BVE1) is stored as a JSON STRING — the
 		// envelope is escaped once. STJ writes a string property as a JSON string literal, so
 		// passing the raw envelope text directly is correct: storage gets BVE1: "<escaped>".

@@ -89,9 +89,9 @@ public sealed class BusinessRuleFiltersGuidanceResource {
 		       - Missing operand for a binary comparison raises `filter.value-required`. Including `value` for IS_NULL / IS_NOT_NULL is not an error but is ignored.
 
 		       Lookup-record validation
-		       - Lookup leaves are validated for record existence at create time by the server-side `LlmEsqConverterService`, mirroring the creatio-ui lookup picker.
-		       - The leaf value must be a GUID string referencing an existing record in the resolved reference schema. A non-existent or non-GUID value surfaces back to clio as `filter.server-rejected` with the server message; for the missing-record case, the underlying server condition is `filter.lookup-record-not-found`.
-		       - The server reads `(Id, Name, DisplayValue)` from the reference schema and splices `{ Name, Id, value, displayValue }` directly into the emitted envelope for UI parity; clio embeds the envelope verbatim into `BusinessRuleValueExpression.value`.
+		       - Lookup leaves are validated for shape and existence in-process by clio (no `LlmEsqConverterService` dependency, no `CrtCopilot` package required on the target environment).
+		       - The leaf value must be a GUID string referencing an existing record in the resolved reference schema. A non-GUID value raises `filter.lookup-value-not-guid`; a GUID that does not match any record raises `filter.lookup-record-not-found`.
+		       - clio fetches `DisplayValue` for the referenced record via `DataService.SelectQuery` against the reference schema and embeds `{ value, displayValue }` into the parameter so the runtime UI renders the applied filter chip with its label.
 		       - Post-save deletions are NOT tracked. If the referenced record is removed after the rule is saved, the runtime owns that scenario; clio does not retro-validate.
 
 		       Backward-reference filters
@@ -112,7 +112,7 @@ public sealed class BusinessRuleFiltersGuidanceResource {
 
 		       Error code reference
 		       - All filter-side errors surface as `ArgumentException` with the message `<errorCode>: <message> (path=<fieldPath>)`.
-		       - Local (clio-side) codes raised before the server-side conversion is invoked:
+		       - Structural codes (validated before any schema lookup):
 		         - `filter.target-attribute-required` -- `targetAttribute` missing or blank.
 		         - `filter.target-attribute-unknown` -- `targetAttribute` is not a column on the entity schema.
 		         - `filter.target-attribute-not-lookup` -- `targetAttribute` is not a Lookup column with a reference schema.
@@ -121,10 +121,13 @@ public sealed class BusinessRuleFiltersGuidanceResource {
 		         - `filter.logical-operation-unknown` -- unknown logical token (only AND / OR are accepted).
 		         - `filter.comparison-unknown` -- unknown comparison token (use the table above).
 		         - `filter.value-required` -- leaf value missing for a binary comparison.
-		         - `filter.path-unknown` -- leaf with empty `columnPath`.
-		         - `filter.backward-reference-not-1n` -- backward-reference filter without a `referenceColumnPath`.
-		       - Server-side rejection (delegated to `LlmEsqConverterService`):
-		         - `filter.server-rejected` -- the server rejected the friendly filter. The error message includes the server's underlying reason and may surface conditions like `filter.path-unknown`, `filter.path-resolves-to-collection`, `filter.comparison-not-supported-for-datatype`, `filter.value-shape`, `filter.lookup-value-not-guid`, `filter.lookup-record-not-found`, or `filter.backward-reference-not-1n` with the original server detail.
+		       - Schema-aware codes (validated in-process against the reference schema graph):
+		         - `filter.path-unknown` -- a `columnPath` segment does not exist on the resolved schema.
+		         - `filter.comparison-not-supported-for-datatype` -- e.g. `START_WITH` on an Integer column.
+		         - `filter.value-shape` -- leaf value's JSON shape does not match the column's data value type.
+		         - `filter.lookup-value-not-guid` -- Lookup leaf value is not a parseable GUID string.
+		         - `filter.lookup-record-not-found` -- Lookup leaf GUID does not match any existing record.
+		         - `filter.backward-reference-not-1n` -- backward-reference path is missing or does not target a 1:N lookup.
 
 		       Minimal canonical payloads
 		       - Single-leaf EQUAL on a Lookup target:
