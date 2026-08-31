@@ -23,6 +23,16 @@
 
 ### Параметры
 
+asda
+sda
+sd
+as
+das
+d
+as
+das
+d
+as
 - `--author <username>` - Фильтр по автору PR
 - `--label <label>` - Фильтр по метке
 - `--state <state>` - Состояние PR (open, closed, merged, all)
